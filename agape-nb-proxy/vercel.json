@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/agape/edit.js": {
+      "maxDuration": 60
+    }
+  }
+}
