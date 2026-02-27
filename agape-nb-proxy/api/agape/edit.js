@@ -140,16 +140,16 @@ Resolución: ${resolution}
       : "No image generated.";
 
     return res.status(200).json({
-      ok: true,
-      image_url: rawUrl,
-      image_proxy_url: proxyUrl,
-      render_markdown: renderMarkdown,
-      mode,
-      sku,
-      tapa,
-      aspect_ratio,
-      resolution,
-    });
+  ok: true,
+  image_url: rawUrl,
+  image_proxy_url: proxyUrl,
+  render_markdown: `![Agape](${proxyUrl || rawUrl})`,
+  mode,
+  sku,
+  tapa,
+  aspect_ratio,
+  resolution,
+});
   } catch (err) {
     return res.status(500).json({
       ok: false,
@@ -158,3 +158,4 @@ Resolución: ${resolution}
     });
   }
 }
+
