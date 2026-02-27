@@ -139,11 +139,20 @@ Resolución: ${resolution}
 `
       : "No image generated.";
 
-    return res.status(200).json({
+    const render = rawUrl
+  ? `![Agape](${proxyUrl || rawUrl})`
+  : null;
+
+const download = rawUrl
+  ? `Download / open:\n${rawUrl}`
+  : null;
+
+return res.status(200).json({
   ok: true,
   image_url: rawUrl,
   image_proxy_url: proxyUrl,
-  render_markdown: `![Agape](${proxyUrl || rawUrl})`,
+  render_markdown: render,
+  download_markdown: download,
   mode,
   sku,
   tapa,
@@ -158,4 +167,5 @@ Resolución: ${resolution}
     });
   }
 }
+
 
