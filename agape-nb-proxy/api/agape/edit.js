@@ -122,16 +122,29 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({
-      ok: true,
-      image_url: data?.images?.[0]?.url || null,
-      mode,
-      sku,
-      tapa,
-      aspect_ratio,
-      resolution,
-    });
+    const rawUrl = data?.images?.[0]?.url || null;
+
+let finalImageUrl = rawUrl;
+
+if (rawUrl) {
+  const imgRes = await fetch(rawUrl);
+  const buffer = Buffer.from(await imgRes.arrayBuffer());
+  const base64 = buffer.toString("base64");
+  const contentType = imgRes.headers.get("content-type") || "image/png";
+  finalImageUrl = `data:${contentType};base64,${base64}`;
+}
+
+return res.status(200).json({
+  ok: true,
+  image_url: finalImageUrl,
+  mode,
+  sku,
+  tapa,
+  aspect_ratio,
+  resolution,
+});
   } catch (e) {
     return res.status(500).json({ ok: false, error: "server_error", message: e?.message || String(e) });
   }
+
 }
