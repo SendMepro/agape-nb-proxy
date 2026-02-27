@@ -53,6 +53,7 @@ export default async function handler(req, res) {
     } = req.body || {};
 
     const FAL_KEY = process.env.FAL_KEY;
+
     if (!FAL_KEY) {
       return res.status(500).json({
         ok: false,
@@ -74,13 +75,13 @@ No volcanic eruption.
 No exaggerated HDR.
 No 3D look.
 No external brands.
-    `;
+`.trim();
 
     const fullPrompt = `
 ${modeStyle(mode)}
 ${scene}
 ${systemRules}
-    `.trim();
+`.trim();
 
     const falBody = {
       prompt: fullPrompt,
@@ -123,10 +124,26 @@ ${systemRules}
       ? `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`
       : null;
 
+    const renderUrl = proxyUrl || rawUrl || "";
+
+    const renderMarkdown = renderUrl
+      ? `![Agape](${renderUrl})
+
+Descargar / abrir:
+${rawUrl || renderUrl}
+
+Modo: ${mode}
+SKU: ${sku}
+Aspect ratio: ${aspect_ratio}
+Resolución: ${resolution}
+`
+      : "No image generated.";
+
     return res.status(200).json({
       ok: true,
       image_url: rawUrl,
       image_proxy_url: proxyUrl,
+      render_markdown: renderMarkdown,
       mode,
       sku,
       tapa,
