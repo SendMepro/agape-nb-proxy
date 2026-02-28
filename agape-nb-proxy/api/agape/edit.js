@@ -307,10 +307,10 @@ ${COMPOSITION_RULES}
     // Build proxy URL (lets ChatGPT embed reliably)
     const base = buildBaseUrl(req);
     const proxyUrl = `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`;
+const thumbUrl = `${base}/api/agape/thumb?src=${encodeURIComponent(rawUrl)}`;
 
-    // Render markdown: ONLY image markdown line
-    const render_markdown = `![Agape](${proxyUrl || rawUrl})`;
-    const download_markdown = `Download / open:\n${rawUrl}`;
+const render_markdown = `![Agape thumbnail](${thumbUrl})`;
+const download_markdown = `[Download full size image](${proxyUrl || rawUrl})`;
 
     return res.status(200).json({
       ok: true,
@@ -339,3 +339,4 @@ ${COMPOSITION_RULES}
     });
   }
 }
+
