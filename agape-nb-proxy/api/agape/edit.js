@@ -46,14 +46,14 @@ function isString(x) {
   return typeof x === "string";
 }
 
-function clampString(x, maxLen = 500) {
+function clampString(x, maxLen = 800) {
   if (!isString(x)) return "";
   const s = x.trim();
   if (!s) return "";
   return s.length > maxLen ? s.slice(0, maxLen) : s;
 }
 
-function clampEnum(x, allowed, fallback) {
+function clampEnumLower(x, allowed, fallback) {
   const v = clampString(x, 50).toLowerCase();
   return allowed.has(v) ? v : fallback;
 }
@@ -81,6 +81,7 @@ function looksLikeUrl(u) {
 }
 
 function pickBottle({ sku = "600ml", tapa = true }) {
+  // 335ml only exists with cap (asset reality)
   if (sku === "335ml") return ASSETS.bottle_small_335ml;
   return tapa ? ASSETS.bottle_with_cap_600ml : ASSETS.bottle_without_cap_600ml;
 }
@@ -102,7 +103,24 @@ function modeStyle(mode = "") {
   }
 }
 
-// stronger label constraints (prevents hallucinated retyping)
+function buildBaseUrl(req) {
+  const proto = req.headers["x-forwarded-proto"] || "https";
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  return `${proto}://${host}`;
+}
+
+async function fetchWithTimeout(url, options, timeoutMs = 90000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+// ---------- prompt locks ----------
+// Stronger label constraints (prevents hallucinated retyping)
 const LABEL_RULES = `
 LABEL CRITICAL:
 - Do NOT recreate typography.
@@ -110,6 +128,23 @@ LABEL CRITICAL:
 - Preserve the exact printed label from the input bottle asset image.
 - No hallucinated text, no approximations, no altered units.
 - Keep the label fully readable and sharp (no blur on label area).
+`.trim();
+
+// Force keeping butterfly/macaw/orchid (users keep seeing butterfly vanish)
+const LABEL_INTEGRITY_LOCK = `
+LABEL INTEGRITY LOCK:
+- Keep ALL label illustrations exactly as printed on the input asset.
+- Mandatory: blue butterfly (upper-left), red macaw, pink orchid, mountain-drop logo.
+- Do NOT remove, simplify, restyle, or omit any printed illustration.
+`.trim();
+
+// Product hierarchy: no competing bottled products; other drinks allowed only in unbranded glasses
+const PRODUCT_HIERARCHY = `
+PRODUCT HIERARCHY:
+- The Agape bottle is the ONLY branded beverage visible.
+- No other water bottles or bottled beverages.
+- Other drinks are allowed ONLY in neutral, unbranded glasses (no labels), and must stay secondary.
+- Agape must be the sharpest, dominant focal point.
 `.trim();
 
 const PRODUCT_RULES = `
@@ -123,22 +158,13 @@ Authentic daylight behavior.
 No lava. No volcanic eruption. No exaggerated HDR. No 3D look. No external brands/logos.
 `.trim();
 
-function buildBaseUrl(req) {
-  const proto = req.headers["x-forwarded-proto"] || "https";
-  const host = req.headers["x-forwarded-host"] || req.headers.host;
-  return `${proto}://${host}`;
-}
-
-async function fetchWithTimeout(url, options, timeoutMs = 60000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(id);
-  }
-}
+const COMPOSITION_RULES = `
+COMPOSITION:
+- Bottle must be fully visible.
+- Label fully readable, sharp, not cropped, not warped.
+- Avoid extreme fisheye/wide distortion.
+- Keep bottle scale believable (no giant/miniature bottle unless user explicitly asks).
+`.trim();
 
 // ---------- handler ----------
 export default async function handler(req, res) {
@@ -150,19 +176,36 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
 
   if (req.method !== "POST") {
-    return res.status(405).json({ ok: false, error: "Method not allowed" });
+    return res.status(405).json({
+      ok: false,
+      error: "method_not_allowed",
+      message: "Method not allowed",
+      status: 405,
+    });
   }
 
   try {
     const body = req.body || {};
 
     // sanitize inputs
-    const mode = clampEnum(body.mode, ALLOWED_MODES, "publicitario"); // lowercase
-    const scene = clampString(body.scene, 650); // keep short-ish
-    const sku = clampEnum(body.sku, ALLOWED_SKUS, "600ml"); // lowercase
-    const tapa = toBool(body.tapa, true);
-    const aspect_ratio = clampEnumCaseSensitive(body.aspect_ratio, ALLOWED_ASPECTS, "9:16");
-    const resolution = clampEnumCaseSensitive(body.resolution, ALLOWED_RESOLUTIONS, "1K");
+    const mode = clampEnumLower(body.mode, ALLOWED_MODES, "publicitario");
+    const scene = clampString(body.scene, 650);
+    const sku = clampEnumLower(body.sku, ALLOWED_SKUS, "600ml");
+
+    // IMPORTANT: 335ml is cap-only. If user tries 335ml + tapa=false, force true.
+    let tapa = toBool(body.tapa, true);
+    if (sku === "335ml") tapa = true;
+
+    const aspect_ratio = clampEnumCaseSensitive(
+      body.aspect_ratio,
+      ALLOWED_ASPECTS,
+      "9:16"
+    );
+    const resolution = clampEnumCaseSensitive(
+      body.resolution,
+      ALLOWED_RESOLUTIONS,
+      "1K"
+    );
 
     // optional reference image (for matching camera/angle)
     const reference_image_url = clampString(body.reference_image_url, 800);
@@ -172,7 +215,9 @@ export default async function handler(req, res) {
     if (!FAL_KEY) {
       return res.status(500).json({
         ok: false,
-        error: "Missing FAL_KEY environment variable",
+        error: "missing_fal_key",
+        message: "Missing FAL_KEY environment variable",
+        status: 500,
       });
     }
 
@@ -181,10 +226,10 @@ export default async function handler(req, res) {
     const REF_RULES = hasRef
       ? `
 REFERENCE MODE (composition only):
-- Match the camera angle, framing, lens look (35/50/85mm feel), depth of field and bokeh of the reference image.
+- Match the camera angle, framing, lens look, depth of field and bokeh of the reference image.
 - Use the reference ONLY for composition/lighting/mood.
-- Do NOT copy clothing, faces, brands, logos, text, or unique identifiers from the reference image.
-- Create an original scene; the ONLY product is the Agape bottle asset (preserved exactly).
+- Do NOT copy clothing, faces, brands, logos, text, or unique identifiers from the reference.
+- Create an original scene; the ONLY branded product is the Agape bottle asset (preserved exactly).
 `.trim()
       : "";
 
@@ -195,11 +240,9 @@ Scene request: ${scene || "Create the best matching scene for the selected mode.
 ${REF_RULES}
 ${PRODUCT_RULES}
 ${LABEL_RULES}
-
-COMPOSITION:
-- Bottle must be fully visible.
-- Label fully readable, sharp, not cropped, not warped.
-- Avoid extreme fisheye/wide distortion.
+${LABEL_INTEGRITY_LOCK}
+${PRODUCT_HIERARCHY}
+${COMPOSITION_RULES}
 `.trim();
 
     // IMPORTANT: order matters.
@@ -215,7 +258,7 @@ COMPOSITION:
       output_format: "png",
       safety_tolerance: "4",
       num_images: 1,
-      // DO NOT set sync_mode (you asked not to use it)
+      // DO NOT set sync_mode
     };
 
     const r = await fetchWithTimeout(
@@ -231,17 +274,18 @@ COMPOSITION:
       90000
     );
 
-    let data = null;
+    let data;
     try {
       data = await r.json();
     } catch {
-      data = { error: "Invalid JSON from upstream" };
+      data = { error: "invalid_json_from_upstream" };
     }
 
     if (!r.ok) {
       return res.status(r.status).json({
         ok: false,
         error: "fal_error",
+        message: "Upstream (fal) returned an error",
         status: r.status,
         details: data,
       });
@@ -249,17 +293,24 @@ COMPOSITION:
 
     const rawUrl = data?.images?.[0]?.url || null;
 
+    // CRITICAL: never return ok:true without a real image URL
+    if (!rawUrl) {
+      return res.status(502).json({
+        ok: false,
+        error: "no_image_returned",
+        message: "fal returned no images",
+        status: 502,
+        details: data,
+      });
+    }
+
     // Build proxy URL (lets ChatGPT embed reliably)
     const base = buildBaseUrl(req);
-    const proxyUrl = rawUrl
-      ? `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`
-      : null;
+    const proxyUrl = `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`;
 
-    // Render markdown: ONLY image markdown (your system prompt can print it exactly)
-    const render_markdown =
-      rawUrl ? `![Agape](${proxyUrl || rawUrl})` : null;
-
-    const download_markdown = rawUrl ? `Download / open:\n${rawUrl}` : null;
+    // Render markdown: ONLY image markdown line
+    const render_markdown = `![Agape](${proxyUrl || rawUrl})`;
+    const download_markdown = `Download / open:\n${rawUrl}`;
 
     return res.status(200).json({
       ok: true,
@@ -284,6 +335,7 @@ COMPOSITION:
       ok: false,
       error: "server_error",
       message,
+      status: 500,
     });
   }
 }
