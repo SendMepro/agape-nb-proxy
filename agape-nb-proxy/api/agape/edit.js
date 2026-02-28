@@ -308,8 +308,9 @@ ${COMPOSITION_RULES}
     const base = buildBaseUrl(req);
     const proxyUrl = `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`;
 
-const render_markdown = `![Agape](${proxyUrl || rawUrl})`;
-const download_markdown = `Download / open:\n${rawUrl}`;
+    // Render markdown: ONLY image markdown line
+    const render_markdown = `![Agape](${proxyUrl || rawUrl})`;
+    const download_markdown = `Download / open:\n${rawUrl}`;
 
     return res.status(200).json({
       ok: true,
@@ -338,5 +339,3 @@ const download_markdown = `Download / open:\n${rawUrl}`;
     });
   }
 }
-
-
