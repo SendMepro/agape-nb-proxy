@@ -1,4 +1,3 @@
-// api/agape/image.js
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req, res) {
@@ -19,7 +18,7 @@ export default async function handler(req, res) {
 
     const buf = Buffer.from(await r.arrayBuffer());
     return res.status(200).send(buf);
-  } catch (e) {
+  } catch {
     return res.status(500).send("Server error");
   }
 }
