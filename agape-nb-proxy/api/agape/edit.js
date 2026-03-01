@@ -80,7 +80,7 @@ function looksLikeUrl(u) {
 }
 
 function pickBottle({ sku = "600ml", tapa = true }) {
-  // 335ml only exists with cap (asset reality)
+  // 335ml only exists with cap
   if (sku === "335ml") return ASSETS.bottle_small_335ml;
   return tapa ? ASSETS.bottle_with_cap_600ml : ASSETS.bottle_without_cap_600ml;
 }
@@ -252,9 +252,7 @@ ${PRODUCT_HIERARCHY}
 ${COMPOSITION_RULES}
 `.trim();
 
-    // IMPORTANT: order matters.
-    // If hasRef: [reference, bottle] so model can follow camera take but keep bottle exact.
-    // If no ref: [bottle] only.
+    // If hasRef: [reference, bottle] so model follows camera take but keeps bottle exact.
     const image_urls = hasRef ? [reference_image_url, bottleUrl] : [bottleUrl];
 
     const falBody = {
@@ -265,7 +263,6 @@ ${COMPOSITION_RULES}
       output_format: "png",
       safety_tolerance: "4",
       num_images: 1,
-      // DO NOT set sync_mode
     };
 
     const r = await fetchWithTimeout(
@@ -281,11 +278,13 @@ ${COMPOSITION_RULES}
       90000
     );
 
+    // ✅ Always parse as text first, then JSON (prevents HTML/non-JSON breaking your tool)
+    const text = await r.text();
     let data;
     try {
-      data = await r.json();
+      data = JSON.parse(text);
     } catch {
-      data = { error: "invalid_json_from_upstream" };
+      data = { raw: text };
     }
 
     if (!r.ok) {
@@ -300,7 +299,6 @@ ${COMPOSITION_RULES}
 
     const rawUrl = data?.images?.[0]?.url || null;
 
-    // CRITICAL: never return ok:true without a real image URL
     if (!rawUrl) {
       return res.status(502).json({
         ok: false,
@@ -311,11 +309,9 @@ ${COMPOSITION_RULES}
       });
     }
 
-    // Build proxy URL (lets ChatGPT embed reliably)
     const base = buildBaseUrl(req);
     const proxyUrl = `${base}/api/agape/image?src=${encodeURIComponent(rawUrl)}`;
 
-    // Render markdown: ONLY image markdown line
     const render_markdown = `![Agape](${proxyUrl || rawUrl})`;
     const download_markdown = `Download / open:\n${rawUrl}`;
 
@@ -325,8 +321,8 @@ ${COMPOSITION_RULES}
       image_proxy_url: proxyUrl,
       render_markdown,
       download_markdown,
-      mode, // lowercase
-      sku, // lowercase
+      mode,
+      sku,
       tapa,
       aspect_ratio,
       resolution,
