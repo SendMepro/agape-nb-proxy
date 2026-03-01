@@ -185,7 +185,17 @@ export default async function handler(req, res) {
   }
 
   try {
-    const body = req.body || {};
+    const raw = req.body ?? {};
+const body =
+  typeof raw === "string"
+    ? (() => {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return {};
+        }
+      })()
+    : raw;
 
     // sanitize inputs
     const mode = clampEnumLower(body.mode, ALLOWED_MODES, "publicitario");
@@ -339,3 +349,4 @@ ${COMPOSITION_RULES}
     });
   }
 }
+
