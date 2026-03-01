@@ -9,8 +9,7 @@ const FAL_ENDPOINT = "https://fal.run/fal-ai/nano-banana-pro/edit";
 // Official assets (ONLY these)
 const ASSETS = {
   bottle_with_cap_600ml: "https://sendmelab.com/itag/gpts/bottle_with_cap.png",
-  bottle_without_cap_600ml:
-    "https://sendmelab.com/itag/gpts/bottle_without_cap.png",
+  bottle_without_cap_600ml: "https://sendmelab.com/itag/gpts/bottle_without_cap.png",
   bottle_small_335ml: "https://sendmelab.com/itag/gpts/Bottle-Small.png",
 };
 
@@ -120,7 +119,6 @@ async function fetchWithTimeout(url, options, timeoutMs = 90000) {
 }
 
 // ---------- prompt locks ----------
-// Stronger label constraints (prevents hallucinated retyping)
 const LABEL_RULES = `
 LABEL CRITICAL:
 - Do NOT recreate typography.
@@ -130,7 +128,6 @@ LABEL CRITICAL:
 - Keep the label fully readable and sharp (no blur on label area).
 `.trim();
 
-// Force keeping butterfly/macaw/orchid (users keep seeing butterfly vanish)
 const LABEL_INTEGRITY_LOCK = `
 LABEL INTEGRITY LOCK:
 - Keep ALL label illustrations exactly as printed on the input asset.
@@ -138,7 +135,6 @@ LABEL INTEGRITY LOCK:
 - Do NOT remove, simplify, restyle, or omit any printed illustration.
 `.trim();
 
-// Product hierarchy: no competing bottled products; other drinks allowed only in unbranded glasses
 const PRODUCT_HIERARCHY = `
 PRODUCT HIERARCHY:
 - The Agape bottle is the ONLY branded beverage visible.
@@ -185,17 +181,18 @@ export default async function handler(req, res) {
   }
 
   try {
+    // ✅ FIX: req.body can arrive as a string in serverless/action calls
     const raw = req.body ?? {};
-const body =
-  typeof raw === "string"
-    ? (() => {
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return {};
-        }
-      })()
-    : raw;
+    const body =
+      typeof raw === "string"
+        ? (() => {
+            try {
+              return JSON.parse(raw);
+            } catch {
+              return {};
+            }
+          })()
+        : raw;
 
     // sanitize inputs
     const mode = clampEnumLower(body.mode, ALLOWED_MODES, "publicitario");
@@ -349,4 +346,3 @@ ${COMPOSITION_RULES}
     });
   }
 }
-
