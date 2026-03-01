@@ -1,6 +1,7 @@
 // api/agape/edit.js
 // Vercel Serverless Function (Node.js) -> calls fal Nano Banana Pro (edit)
-// Supports OPTIONAL reference_image_url to match camera angle/framing (no cloning)
+// Reference-first composition: when reference_image_url is provided, camera/framing MUST match reference.
+// Product/label lock remains strict.
 
 export const config = { runtime: "nodejs" };
 
@@ -14,30 +15,9 @@ const ASSETS = {
 };
 
 // Allowed enums (defensive)
-const ALLOWED_MODES = new Set([
-  "naturaleza",
-  "spot",
-  "corporativo",
-  "caribe",
-  "publicitario",
-]);
-
+const ALLOWED_MODES = new Set(["naturaleza", "spot", "corporativo", "caribe", "publicitario"]);
 const ALLOWED_SKUS = new Set(["600ml", "335ml"]);
-
-const ALLOWED_ASPECTS = new Set([
-  "auto",
-  "21:9",
-  "16:9",
-  "3:2",
-  "4:3",
-  "5:4",
-  "1:1",
-  "4:5",
-  "3:4",
-  "2:3",
-  "9:16",
-]);
-
+const ALLOWED_ASPECTS = new Set(["auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16"]);
 const ALLOWED_RESOLUTIONS = new Set(["1K", "2K", "4K"]);
 
 // ---------- helpers ----------
@@ -80,7 +60,7 @@ function looksLikeUrl(u) {
 }
 
 function pickBottle({ sku = "600ml", tapa = true }) {
-  // 335ml only exists with cap
+  // 335ml only exists with cap (asset reality)
   if (sku === "335ml") return ASSETS.bottle_small_335ml;
   return tapa ? ASSETS.bottle_with_cap_600ml : ASSETS.bottle_without_cap_600ml;
 }
@@ -90,15 +70,15 @@ function modeStyle(mode = "") {
     case "naturaleza":
       return "Costa Rica lush tropical nature, documentary realism, fresh atmosphere, natural daylight, subtle mist.";
     case "spot":
-      return "Premium advertising spot look, controlled key light, cinematic highlights, clean composition, high-end beverage photography.";
+      return "Premium advertising spot look, controlled key light, cinematic highlights, high-end beverage photography.";
     case "corporativo":
       return "Modern executive environment, clean architecture, refined materials, controlled natural daylight, minimalist premium style.";
     case "caribe":
       return "Costa Rica tropical beach at golden hour, calm ocean bokeh, wet sand, premium editorial lighting, serene luxury.";
     case "publicitario":
-      return "Hero product composition, refined commercial beverage photography, premium editorial look, clean brand-first framing.";
+      return "Premium editorial beverage photography, high contrast when needed, brand-first but natural framing (unless reference overrides).";
     default:
-      return "Premium commercial beverage photography, clean product-first composition.";
+      return "Premium editorial beverage photography, natural optical physics.";
   }
 }
 
@@ -140,31 +120,60 @@ PRODUCT HIERARCHY:
 - The Agape bottle is the ONLY branded beverage visible.
 - No other water bottles or bottled beverages.
 - Other drinks are allowed ONLY in neutral, unbranded glasses (no labels), and must stay secondary.
-- Agape must be the sharpest, dominant focal point.
+- Agape must be the primary focal product.
 `.trim();
 
 const PRODUCT_RULES = `
 PRODUCT CRITICAL:
-Do not modify bottle geometry, proportions, label, or text.
-Preserve the product exactly.
-Photorealistic commercial beverage photography.
-Natural optical physics.
-Realistic clear plastic refraction.
-Authentic daylight behavior.
-No lava. No volcanic eruption. No exaggerated HDR. No 3D look. No external brands/logos.
+- Do not modify bottle geometry, proportions, cap, label, or text.
+- Preserve the product exactly (photorealistic).
+- Natural optical physics, realistic clear plastic refraction.
+- No external brands/logos.
 `.trim();
 
-const COMPOSITION_RULES = `
+// IMPORTANT: We RELAX "centered hero framing" in reference mode.
+// We still keep label readable, but we do NOT force centered packshot.
+const COMPOSITION_RULES_BASE = `
 COMPOSITION:
-- Bottle must be fully visible.
-- Label fully readable, sharp, not cropped, not warped.
-- Avoid extreme fisheye/wide distortion.
-- Keep bottle scale believable (no giant/miniature bottle unless user explicitly asks).
+- Bottle must be fully visible when possible.
+- Label must be readable and sharp.
+- Avoid fisheye/extreme distortion.
+`.trim();
+
+const COMPOSITION_RULES_REFERENCE = `
+COMPOSITION (REFERENCE OVERRIDES DEFAULTS):
+- DO NOT recenter the bottle if the reference is off-center.
+- DO NOT clean up the framing into a packshot.
+- Preserve asymmetry, dynamic cropping, and spontaneous framing if present.
+- Bottle can be placed where the reference product is placed.
+- If reference includes lifestyle energy, keep that energy (people/hand/setting) BUT keep Agape as the only branded bottle.
+- Label must remain readable; if occlusion occurs, keep label mostly visible and sharp.
+`.trim();
+
+const REFERENCE_DOMINANCE = `
+REFERENCE COMPOSITION DOMINANCE (MANDATORY):
+The reference image composition has ABSOLUTE priority.
+
+You MUST replicate EXACTLY:
+- Camera angle, camera height, camera tilt
+- Distance to subject (framing tightness)
+- Subject scale within frame
+- Cropping style and placement
+- Lens compression / focal length feeling
+- Depth of field style
+- Light direction + rim highlights + contrast intensity
+
+Do NOT:
+- Recenter the bottle
+- Improve symmetry
+- Convert into centered commercial packshot
+- Switch to hero frontal view
+- Change perspective
 `.trim();
 
 // ---------- handler ----------
 export default async function handler(req, res) {
-  // Optional CORS (safe defaults)
+  // CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
@@ -172,16 +181,11 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
 
   if (req.method !== "POST") {
-    return res.status(405).json({
-      ok: false,
-      error: "method_not_allowed",
-      message: "Method not allowed",
-      status: 405,
-    });
+    return res.status(405).json({ ok: false, error: "method_not_allowed", status: 405 });
   }
 
   try {
-    // ✅ FIX: req.body can arrive as a string in serverless/action calls
+    // req.body can arrive as string
     const raw = req.body ?? {};
     const body =
       typeof raw === "string"
@@ -194,65 +198,66 @@ export default async function handler(req, res) {
           })()
         : raw;
 
-    // sanitize inputs
     const mode = clampEnumLower(body.mode, ALLOWED_MODES, "publicitario");
     const scene = clampString(body.scene, 650);
     const sku = clampEnumLower(body.sku, ALLOWED_SKUS, "600ml");
 
-    // IMPORTANT: 335ml is cap-only. If user tries 335ml + tapa=false, force true.
     let tapa = toBool(body.tapa, true);
     if (sku === "335ml") tapa = true;
 
-    const aspect_ratio = clampEnumCaseSensitive(
-      body.aspect_ratio,
-      ALLOWED_ASPECTS,
-      "9:16"
-    );
-    const resolution = clampEnumCaseSensitive(
-      body.resolution,
-      ALLOWED_RESOLUTIONS,
-      "1K"
-    );
+    const aspect_ratio = clampEnumCaseSensitive(body.aspect_ratio, ALLOWED_ASPECTS, "9:16");
+    const resolution = clampEnumCaseSensitive(body.resolution, ALLOWED_RESOLUTIONS, "1K");
 
-    // optional reference image (for matching camera/angle)
     const reference_image_url = clampString(body.reference_image_url, 800);
     const hasRef = looksLikeUrl(reference_image_url);
 
     const FAL_KEY = process.env.FAL_KEY;
     if (!FAL_KEY) {
-      return res.status(500).json({
-        ok: false,
-        error: "missing_fal_key",
-        message: "Missing FAL_KEY environment variable",
-        status: 500,
-      });
+      return res.status(500).json({ ok: false, error: "missing_fal_key", status: 500 });
     }
 
     const bottleUrl = pickBottle({ sku, tapa });
 
+    // Scene default
+    const sceneLine =
+      scene || (hasRef
+        ? "Reinterpret the reference composition exactly, integrating the official Agape bottle asset."
+        : "Create the best matching scene for the selected mode.");
+
+    // Reference rules — NOTE: placed at END of prompt for highest priority
     const REF_RULES = hasRef
       ? `
-REFERENCE MODE (composition only):
-- Match the camera angle, framing, lens look, depth of field and bokeh of the reference image.
-- Use the reference ONLY for composition/lighting/mood.
-- Do NOT copy clothing, faces, brands, logos, text, or unique identifiers from the reference.
-- Create an original scene; the ONLY branded product is the Agape bottle asset (preserved exactly).
+${REFERENCE_DOMINANCE}
+
+REFERENCE USAGE RULES:
+- Use the reference ONLY for camera, framing, lighting direction, mood, and environment structure.
+- Preserve dynamic lifestyle energy if present in reference (movement, crowd, hands, spontaneity).
+- Do NOT copy brands/logos/text/faces from the reference.
+- The ONLY branded bottle must be Agape (from the official asset).
+- Keep the Agape label sharp and readable.
 `.trim()
       : "";
 
+    // Choose composition rules based on reference
+    const compositionBlock = hasRef
+      ? `${COMPOSITION_RULES_BASE}\n\n${COMPOSITION_RULES_REFERENCE}`
+      : COMPOSITION_RULES_BASE;
+
+    // ✅ CRITICAL CHANGE: Reference rules go LAST (strongest)
     const fullPrompt = `
 ${modeStyle(mode)}
-Scene request: ${scene || "Create the best matching scene for the selected mode."}
+Scene request: ${sceneLine}
 
-${REF_RULES}
 ${PRODUCT_RULES}
 ${LABEL_RULES}
 ${LABEL_INTEGRITY_LOCK}
 ${PRODUCT_HIERARCHY}
-${COMPOSITION_RULES}
+${compositionBlock}
+
+${REF_RULES}
 `.trim();
 
-    // If hasRef: [reference, bottle] so model follows camera take but keeps bottle exact.
+    // Order matters: reference first, then bottle asset
     const image_urls = hasRef ? [reference_image_url, bottleUrl] : [bottleUrl];
 
     const falBody = {
@@ -278,7 +283,7 @@ ${COMPOSITION_RULES}
       90000
     );
 
-    // ✅ Always parse as text first, then JSON (prevents HTML/non-JSON breaking your tool)
+    // Always parse as text first (prevents HTML breaking tool)
     const text = await r.text();
     let data;
     try {
@@ -291,19 +296,16 @@ ${COMPOSITION_RULES}
       return res.status(r.status).json({
         ok: false,
         error: "fal_error",
-        message: "Upstream (fal) returned an error",
         status: r.status,
         details: data,
       });
     }
 
     const rawUrl = data?.images?.[0]?.url || null;
-
     if (!rawUrl) {
       return res.status(502).json({
         ok: false,
         error: "no_image_returned",
-        message: "fal returned no images",
         status: 502,
         details: data,
       });
@@ -329,16 +331,7 @@ ${COMPOSITION_RULES}
       reference_image_url: hasRef ? reference_image_url : null,
     });
   } catch (err) {
-    const message =
-      err?.name === "AbortError"
-        ? "Upstream timeout"
-        : err?.message || "Unknown error";
-
-    return res.status(500).json({
-      ok: false,
-      error: "server_error",
-      message,
-      status: 500,
-    });
+    const message = err?.name === "AbortError" ? "Upstream timeout" : err?.message || "Unknown error";
+    return res.status(500).json({ ok: false, error: "server_error", message, status: 500 });
   }
 }
